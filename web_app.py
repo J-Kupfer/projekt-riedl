@@ -6,6 +6,7 @@ import os
 import uuid
 import json
 import time
+import re
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, Response, stream_with_context
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
@@ -115,6 +116,23 @@ def format_as_markdown(filename, answers):
     
     return md_content
 
+def format_as_text(filename, answers):
+    """Format answers as plain text."""
+    text_content = f"Analysis of {filename}\n{'=' * (15 + len(filename))}\n\n"
+    
+    for key, qa in answers.items():
+        if not key.startswith("question_"):
+            continue
+        
+        text_content += f"{qa['question']}\n{'-' * len(qa['question'])}\n\n"
+        text_content += f"{qa['answer']}\n\n"
+    
+    # Clean up any HTML tags that might appear in the LLM output
+    # Use a regular expression to remove all HTML tags
+    text_content = re.sub(r'<[^>]*>', '', text_content)
+    
+    return text_content
+
 # Routes
 @app.route('/')
 def index():
@@ -180,7 +198,8 @@ def process_job(job_id):
             'success': True,
             'completed': True,
             'answers': job_data['answers'],
-            'md_filename': job_data.get('md_filename', '')
+            'md_filename': job_data.get('md_filename', ''),
+            'txt_filename': job_data.get('txt_filename', '')
         })
     
     def generate_results():
@@ -245,16 +264,26 @@ def process_job(job_id):
         
         with open(md_filepath, 'w', encoding='utf-8') as f:
             f.write(md_content)
+            
+        # Create text file version
+        txt_content = format_as_text(job_data['filename'], all_answers)
+        txt_filename = f"{job_data['unique_filename'].rsplit('.', 1)[0]}.txt"
+        txt_filepath = os.path.join(app.config['UPLOAD_FOLDER'], txt_filename)
+        
+        with open(txt_filepath, 'w', encoding='utf-8') as f:
+            f.write(txt_content)
         
         # Update job status as completed
         job_data['answers'] = all_answers
         job_data['md_filename'] = md_filename
+        job_data['txt_filename'] = txt_filename
         job_data['status'] = 'completed'
         
         # Send final completion message
         completion_result = {
             "completed": True,
-            "md_filename": md_filename
+            "md_filename": md_filename,
+            "txt_filename": txt_filename
         }
         yield json.dumps(completion_result) + "\n"
     
@@ -264,9 +293,20 @@ def process_job(job_id):
 @app.route('/download/<filename>')
 def download(filename):
     """Download a processed markdown file."""
+    mimetype = 'text/markdown' if filename.endswith('.md') else 'text/plain'
     return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), 
-                    mimetype='text/markdown', 
+                    mimetype=mimetype, 
                     download_name=filename,
+                    as_attachment=True)
+
+@app.route('/download-text/<filename>')
+def download_text(filename):
+    """Download a processed text file."""
+    base_filename = filename.rsplit('.', 1)[0]
+    txt_filename = f"{base_filename}.txt"
+    return send_file(os.path.join(app.config['UPLOAD_FOLDER'], txt_filename), 
+                    mimetype='text/plain', 
+                    download_name=txt_filename,
                     as_attachment=True)
 
 if __name__ == '__main__':

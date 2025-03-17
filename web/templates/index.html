@@ -100,7 +100,10 @@
         <div class="results" id="resultsSection">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Analysis Results</h2>
-                <button id="downloadBtn" class="btn btn-success" disabled>Download as Markdown</button>
+                <div>
+                    <button id="downloadBtn" class="btn btn-success" disabled>Download as Markdown</button>
+                    <button id="downloadTxtBtn" class="btn btn-outline-secondary ms-2" disabled>Download as Text</button>
+                </div>
             </div>
             
             <div id="answersContainer">
@@ -120,6 +123,7 @@
             const downloadBtn = document.getElementById('downloadBtn');
             
             let mdFilename = '';
+            let txtFilename = '';
             let processingStream = null;
             
             // Add a new question field
@@ -306,7 +310,9 @@
                 // Handle completion
                 if (result.completed) {
                     mdFilename = result.md_filename;
+                    txtFilename = result.txt_filename;
                     downloadBtn.disabled = false;
+                    downloadTxtBtn.disabled = false;
                     return;
                 }
                 
@@ -332,6 +338,16 @@
             downloadBtn.addEventListener('click', function() {
                 if (mdFilename) {
                     window.location.href = `/download/${mdFilename}`;
+                } else {
+                    alert('No results available for download.');
+                }
+            });
+            
+            // Handle text download button
+            const downloadTxtBtn = document.getElementById('downloadTxtBtn');
+            downloadTxtBtn.addEventListener('click', function() {
+                if (txtFilename) {
+                    window.location.href = `/download-text/${txtFilename}`;
                 } else {
                     alert('No results available for download.');
                 }
