@@ -13,6 +13,7 @@ from werkzeug.utils import secure_filename
 
 from rag.pipeline import RAGPipeline
 from rag.document_loader import PDFProcessor
+from rag.llm import OllamaLLM
 
 # Load environment variables
 load_dotenv()
@@ -144,6 +145,37 @@ def clean_output(text):
     # Remove HTML tags
     text = re.sub(r'<[^>]*>', '', text)
     
+    # Remove thinking part from reasoning models (as a backup)
+    # Look for patterns that indicate thinking/reasoning before the answer
+    thinking_patterns = [
+        # Match sections that start with "Let me think" or "I'll think" and similar reasoning starters
+        r'(?i)(Let me think|I\'ll think|Lass mich nachdenken|Ich denke nach|Thinking through this|Thinking about this|First, I\'ll analyze|Zuerst analysiere ich|Looking at this document|Let\'s start by analyzing)[^.]*?\..*?(?=\n\n|\Z)',
+        # Match sections that explain reasoning/thought process
+        r'(?i)(Um diese Frage zu beantworten|To answer this question|I need to look for|Ich muss nach|First I will|Zuerst werde ich)[^.]*?\..*?(?=\n\n|\Z)',
+        # Match sections that discuss analysis approach
+        r'(?i)(I will analyze|Ich werde analysieren|I\'ll check if|Ich prüfe ob|Let me go through|Ich gehe durch|I need to determine|Ich muss feststellen)[^.]*?\..*?(?=\n\n|\Z)'
+    ]
+    
+    for pattern in thinking_patterns:
+        # Remove the thinking parts if they appear at the beginning of the text
+        text = re.sub(r'^' + pattern, '', text, flags=re.MULTILINE | re.DOTALL)
+    
+    # Remove any lines that explicitly mention "thinking" or "reasoning"
+    text = re.sub(r'(?i)^.*?\b(thinking|reasoning|denken|überlegung)\b.*$\n?', '', text, flags=re.MULTILINE)
+    
+    # Look for common structural indicators of thinking sections followed by the actual answer
+    # This handles cases where the model uses phrases like "Now, the answer is..." or "My answer is..."
+    answer_transition_patterns = [
+        r'(?i).*?(Now,\s+(?:the|my)\s+answer\s+is:?|Die\s+Antwort\s+ist:?|Meine\s+Antwort\s+ist:?|In\s+summary:?|Zusammenfassend:?|To\s+summarize:?|Therefore:?|Daher:?|Deshalb:?)(.+)',
+        r'(?i).*?(After\s+analyzing\s+the\s+document:?|Nach\s+Analyse\s+des\s+Dokuments:?)(.+)'
+    ]
+    
+    for pattern in answer_transition_patterns:
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            # Keep only the part after the transition phrase
+            text = match.group(2).strip()
+    
     # Remove any trailing whitespace or extra new lines
     text = text.strip()
     
@@ -243,14 +275,75 @@ def process_job(job_id):
         # Generate answers for each question incrementally
         for i, question in enumerate(job_data['questions']):
             try:
+                # Signal the start of this question processing
+                start_result = {
+                    "question_index": i,
+                    "question": question,
+                    "status": "started"
+                }
+                yield json.dumps(start_result) + "\n"
+                
                 # Create the RAG chain with the specific question for prompt selection
                 rag_chain = pipeline.ollama_llm.create_rag_chain(retriever, question=question)
-                # Generate the answer
-                answer = rag_chain.invoke(question)
+                
+                # Get context for the question
+                docs = retriever.invoke(question)
+                formatted_docs = []
+                for doc in docs:
+                    page_number = doc.metadata.get("page", 1)
+                    formatted_text = f"""
+=========
+PAGE NUMBER {page_number}
+=========
+{doc.page_content}
+=========
+PAGE END
+========="""
+                    formatted_docs.append(formatted_text)
+                
+                context = "\n\n".join(formatted_docs)
+                
+                # Select the appropriate prompt template
+                prompt_template = pipeline.ollama_llm.rag_prompt_template
+                if question in pipeline.ollama_llm.question_prompts:
+                    prompt_template = pipeline.ollama_llm.question_prompts[question]
+                
+                # Prepare inputs
+                inputs = {
+                    "context": context,
+                    "query": question
+                }
+                
+                # Get prepared prompt
+                prompt = prompt_template.format_prompt(**inputs).to_string()
+                
+                # Set streaming=True parameter
+                streaming_llm = OllamaLLM(
+                    model=pipeline.ollama_llm.model_name,
+                    temperature=pipeline.ollama_llm.temperature,
+                    num_ctx=pipeline.ollama_llm.num_ctx,
+                    streaming=True
+                )
+                
+                # Stream the response
+                answer = ""
+                for chunk in streaming_llm.stream(prompt):
+                    answer += chunk
+                    # Send each chunk to the client
+                    chunk_result = {
+                        "question_index": i,
+                        "question": question,
+                        "chunk": chunk,
+                        "status": "streaming"
+                    }
+                    yield json.dumps(chunk_result) + "\n"
+                
+                # Signal completion of this question
                 result = {
                     "question_index": i,
                     "question": question,
-                    "answer": answer
+                    "answer": answer,
+                    "status": "completed"
                 }
                 
                 # Save the answer in the job data

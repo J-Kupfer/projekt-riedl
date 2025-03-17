@@ -46,8 +46,9 @@ class OllamaWrapper:
             Wenn die Antwort nicht im Kontext zu finden ist, antworte mit "Die Antwort ist nicht im Dokument enthalten."
             Nutze alle relevanten Informationen und sei so detailliert wie möglich.
             
-            Wichtig: Beziehe dich bei deinen Antworten immer auf die Seitenzahlen im Dokument (PAGE NUMBER X). 
-            Gib für wichtige Informationen und Zitate immer die Seitenzahl an, auf der sie zu finden sind.
+            Wichtig: 
+            1. Beziehe dich bei deinen Antworten immer auf die Seitenzahlen im Dokument (PAGE NUMBER X).
+            2. Gib für wichtige Informationen und Zitate immer die Seitenzahl an, auf der sie zu finden sind.
             
             Kontext:
             {context}
