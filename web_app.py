@@ -44,8 +44,8 @@ DEFAULT_QUESTIONS = [
     "Bitte schreibe eine zusammenfassung der Akte in ca. 250 Wörtern",
     "Bitte erstelle ein formatiertes Inhaltsverzeichnis mit zusammenfassenden Titeln und Seitenangaben",
     "Bitte gib mir, formatiert, eine Ausgabe über alle Beteiligte mit Kontaktangaben, außer der Kanzlei Riedl",
-    "Waren bei dem Fall Drogen, Alkohol, Medikamente oder Fahrerflucht im Spiel",
-    "Bitte beantworte kurz und knapp wer der Schuldige in dem Fall war und wie hoch der Schade ist"
+    "Waren bei dem Fall Drogen, Alkohol, Medikamente oder Fahrerflucht im Spiel ?",
+    "Bitte beantworte kurz und knapp wer der Schuldige in dem Fall war und wie hoch der Schaden ist"
 ]
 
 # Initialize the pipeline
