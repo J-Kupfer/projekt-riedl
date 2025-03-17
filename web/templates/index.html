@@ -300,6 +300,28 @@
                                         handleResult(result);
                                     } catch (e) {
                                         console.error('Error parsing JSON:', e);
+                                        console.error('Problematic JSON string:', line.trim());
+                                        
+                                        // Try to recover completion message if present
+                                        if (line.includes('"completed":true')) {
+                                            try {
+                                                // Simple regex to extract filenames
+                                                const mdMatch = line.match(/"md_filename":"([^"]+)"/);
+                                                const txtMatch = line.match(/"txt_filename":"([^"]+)"/);
+                                                
+                                                if (mdMatch && txtMatch) {
+                                                    console.log("Recovered completion info from malformed JSON");
+                                                    const recoveredResult = {
+                                                        completed: true,
+                                                        md_filename: mdMatch[1],
+                                                        txt_filename: txtMatch[1]
+                                                    };
+                                                    handleResult(recoveredResult);
+                                                }
+                                            } catch (innerError) {
+                                                console.error('Failed to recover completion data:', innerError);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -325,18 +347,65 @@
                 // Hide loading indicator when we start getting results
                 loadingIndicator.style.display = 'none';
                 
+                // Add debugging for all received events
+                console.log("Received event:", result);
+                
                 // Handle error
                 if (result.error) {
                     alert('Error: ' + result.error);
                     return;
                 }
                 
-                // Handle completion
-                if (result.completed) {
-                    mdFilename = result.md_filename;
-                    txtFilename = result.txt_filename;
-                    downloadBtn.disabled = false;
-                    downloadTxtBtn.disabled = false;
+                // Handle completion - be more flexible in detection
+                if (result.completed || 
+                    (result.md_filename && result.txt_filename) || 
+                    (typeof result === 'object' && 'status' in result && result.status === 'completed' && 
+                     'md_filename' in result && 'txt_filename' in result)) {
+                    
+                    console.log("Completion event received:", result);
+                    
+                    // Extract filenames - handle different formats
+                    if (result.md_filename) mdFilename = result.md_filename;
+                    if (result.txt_filename) txtFilename = result.txt_filename;
+                    
+                    // Log the filenames
+                    console.log("MD Filename:", mdFilename);
+                    console.log("TXT Filename:", txtFilename);
+                    
+                    // Only enable download buttons if we actually have filenames
+                    if (mdFilename) downloadBtn.disabled = false;
+                    if (txtFilename) downloadTxtBtn.disabled = false;
+                    
+                    // Add completion message
+                    const completionAlert = document.createElement('div');
+                    completionAlert.className = 'alert alert-success mt-3';
+                    completionAlert.textContent = 'Processing completed! You can now download the results.';
+                    answersContainer.appendChild(completionAlert);
+                    
+                    return;
+                }
+                
+                // Handle preparing next question status
+                if (result.status === "preparing_next") {
+                    // Show a preparing message on the page
+                    const preparingDiv = document.createElement('div');
+                    preparingDiv.className = 'alert alert-info mb-3 preparing-alert';
+                    preparingDiv.innerHTML = `
+                        <div class="d-flex align-items-center">
+                            <div class="spinner-border spinner-border-sm me-2" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <span>${result.message || 'Preparing next question...'}</span>
+                        </div>
+                    `;
+                    answersContainer.appendChild(preparingDiv);
+                    
+                    // Auto-remove the alert after the next question starts
+                    setTimeout(() => {
+                        const alerts = document.querySelectorAll('.preparing-alert');
+                        alerts.forEach(alert => alert.remove());
+                    }, 5000);
+                    
                     return;
                 }
                 
@@ -380,6 +449,13 @@
                             
                             card.querySelector('.card-body').innerHTML = `
                                 <div class="answer-container">${answerHtml}</div>
+                            `;
+                        } else if (result.status === "error") {
+                            // Handle error result
+                            card.querySelector('.card-body').innerHTML = `
+                                <div class="answer-container">
+                                    <p class="text-danger">Error: ${result.error}</p>
+                                </div>
                             `;
                         } else {
                             // Legacy format (for backward compatibility)

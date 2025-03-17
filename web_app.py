@@ -129,10 +129,22 @@ def format_as_text(filename, answers):
         text_content += f"{clean_output(qa['answer'])}\n\n"
     
     # Clean up any HTML tags that might appear in the LLM output
-    # Use a regular expression to remove all HTML tags
-    text_content = re.sub(r'<[^>]*>', '', text_content)
+    # Use a simple string-based approach instead of regex to avoid potential issues
+    def remove_html_tags(text):
+        # Simple tag removal without regex
+        result = ""
+        in_tag = False
+        for char in text:
+            if char == '<':
+                in_tag = True
+            elif char == '>':
+                in_tag = False
+                continue
+            elif not in_tag:
+                result += char
+        return result
     
-    return text_content
+    return remove_html_tags(text_content)
 
 def clean_output(text):
     """Clean performance metrics and formatting artifacts from LLM output."""
@@ -149,16 +161,25 @@ def clean_output(text):
     # Look for patterns that indicate thinking/reasoning before the answer
     thinking_patterns = [
         # Match sections that start with "Let me think" or "I'll think" and similar reasoning starters
-        r'(?i)(Let me think|I\'ll think|Lass mich nachdenken|Ich denke nach|Thinking through this|Thinking about this|First, I\'ll analyze|Zuerst analysiere ich|Looking at this document|Let\'s start by analyzing)[^.]*?\..*?(?=\n\n|\Z)',
+        r'(Let me think|I\'ll think|Lass mich nachdenken|Ich denke nach|Thinking through this|Thinking about this|First, I\'ll analyze|Zuerst analysiere ich|Looking at this document|Let\'s start by analyzing)[^.]*?\..*?(?=\n\n|\Z)',
         # Match sections that explain reasoning/thought process
-        r'(?i)(Um diese Frage zu beantworten|To answer this question|I need to look for|Ich muss nach|First I will|Zuerst werde ich)[^.]*?\..*?(?=\n\n|\Z)',
+        r'(Um diese Frage zu beantworten|To answer this question|I need to look for|Ich muss nach|First I will|Zuerst werde ich)[^.]*?\..*?(?=\n\n|\Z)',
         # Match sections that discuss analysis approach
-        r'(?i)(I will analyze|Ich werde analysieren|I\'ll check if|Ich prüfe ob|Let me go through|Ich gehe durch|I need to determine|Ich muss feststellen)[^.]*?\..*?(?=\n\n|\Z)'
+        r'(I will analyze|Ich werde analysieren|I\'ll check if|Ich prüfe ob|Let me go through|Ich gehe durch|I need to determine|Ich muss feststellen)[^.]*?\..*?(?=\n\n|\Z)'
     ]
     
     for pattern in thinking_patterns:
-        # Remove the thinking parts if they appear at the beginning of the text
-        text = re.sub(r'^' + pattern, '', text, flags=re.MULTILINE | re.DOTALL)
+        # Fix: Create the regex pattern correctly without combining flags in the middle
+        # First compile the pattern without the ^ anchor
+        compiled_pattern = re.compile(pattern, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        # Then use it to find matches at the beginning of the text or after newlines
+        matches = list(compiled_pattern.finditer(text))
+        # Process matches in reverse order to avoid index issues when replacing
+        for match in reversed(matches):
+            # Only replace if at the start of text or after a newline
+            pos = match.start()
+            if pos == 0 or text[pos-1] == '\n':
+                text = text[:match.start()] + text[match.end():]
     
     # Remove any lines that explicitly mention "thinking" or "reasoning"
     text = re.sub(r'(?i)^.*?\b(thinking|reasoning|denken|überlegung)\b.*$\n?', '', text, flags=re.MULTILINE)
@@ -251,47 +272,34 @@ def process_job(job_id):
         })
     
     def generate_results():
-        # Process the PDF
-        pdf_processor = PDFProcessor()
-        document = pdf_processor.load_single_document(job_data['filepath'])
-        
-        if not document:
-            yield json.dumps({
-                "error": "Failed to process PDF"
-            }) + "\n"
-            return
-        
-        # Create a retriever that returns the full document
-        class FullDocRetriever:
-            def __init__(self, doc):
-                self.doc = doc
-                
-            def invoke(self, _query):
-                return [self.doc]
-        
-        retriever = FullDocRetriever(document)
-        all_answers = {}
-        
-        # Generate answers for each question incrementally
-        for i, question in enumerate(job_data['questions']):
-            try:
-                # Signal the start of this question processing
-                start_result = {
-                    "question_index": i,
-                    "question": question,
-                    "status": "started"
-                }
-                yield json.dumps(start_result) + "\n"
-                
-                # Create the RAG chain with the specific question for prompt selection
-                rag_chain = pipeline.ollama_llm.create_rag_chain(retriever, question=question)
-                
-                # Get context for the question
-                docs = retriever.invoke(question)
-                formatted_docs = []
-                for doc in docs:
-                    page_number = doc.metadata.get("page", 1)
-                    formatted_text = f"""
+        try:
+            # Process the PDF once
+            pdf_processor = PDFProcessor()
+            document = pdf_processor.load_single_document(job_data['filepath'])
+            
+            if not document:
+                yield json.dumps({
+                    "error": "Failed to process PDF"
+                }) + "\n"
+                return
+            
+            # Create a retriever that returns the full document
+            class FullDocRetriever:
+                def __init__(self, doc):
+                    self.doc = doc
+                    
+                def invoke(self, _query):
+                    return [self.doc]
+            
+            retriever = FullDocRetriever(document)
+            all_answers = {}
+            
+            # Pre-process document once to format it (instead of doing it for each question)
+            docs = retriever.invoke("initial_query")
+            formatted_docs = []
+            for doc in docs:
+                page_number = doc.metadata.get("page", 1)
+                formatted_text = f"""
 =========
 PAGE NUMBER {page_number}
 =========
@@ -299,102 +307,164 @@ PAGE NUMBER {page_number}
 =========
 PAGE END
 ========="""
-                    formatted_docs.append(formatted_text)
-                
-                context = "\n\n".join(formatted_docs)
-                
-                # Select the appropriate prompt template
-                prompt_template = pipeline.ollama_llm.rag_prompt_template
-                if question in pipeline.ollama_llm.question_prompts:
-                    prompt_template = pipeline.ollama_llm.question_prompts[question]
-                
-                # Prepare inputs
-                inputs = {
-                    "context": context,
-                    "query": question
-                }
-                
-                # Get prepared prompt
-                prompt = prompt_template.format_prompt(**inputs).to_string()
-                
-                # Set streaming=True parameter
-                streaming_llm = OllamaLLM(
-                    model=pipeline.ollama_llm.model_name,
-                    temperature=pipeline.ollama_llm.temperature,
-                    num_ctx=pipeline.ollama_llm.num_ctx,
-                    streaming=True
-                )
-                
-                # Stream the response
-                answer = ""
-                for chunk in streaming_llm.stream(prompt):
-                    answer += chunk
-                    # Send each chunk to the client
-                    chunk_result = {
+                formatted_docs.append(formatted_text)
+            
+            context = "\n\n".join(formatted_docs)
+            
+            # Create a single streaming LLM instance to reuse
+            streaming_llm = OllamaLLM(
+                model=pipeline.ollama_llm.model_name,
+                temperature=pipeline.ollama_llm.temperature,
+                num_ctx=pipeline.ollama_llm.num_ctx,
+                streaming=True
+            )
+            
+            # Generate answers for each question incrementally
+            for i, question in enumerate(job_data['questions']):
+                try:
+                    # Signal the start of this question processing
+                    start_result = {
                         "question_index": i,
                         "question": question,
-                        "chunk": chunk,
-                        "status": "streaming"
+                        "status": "started"
                     }
-                    yield json.dumps(chunk_result) + "\n"
+                    yield json.dumps(start_result) + "\n"
+                    
+                    # Select the appropriate prompt template
+                    prompt_template = pipeline.ollama_llm.rag_prompt_template
+                    if question in pipeline.ollama_llm.question_prompts:
+                        prompt_template = pipeline.ollama_llm.question_prompts[question]
+                    
+                    # Prepare inputs
+                    inputs = {
+                        "context": context,
+                        "query": question
+                    }
+                    
+                    # Format prompt with template
+                    prompt = prompt_template.format_prompt(**inputs).to_string()
+                    
+                    # Stream the response
+                    answer = ""
+                    for chunk in streaming_llm.stream(prompt):
+                        answer += chunk
+                        # Send each chunk to the client
+                        chunk_result = {
+                            "question_index": i,
+                            "question": question,
+                            "chunk": chunk,
+                            "status": "streaming"
+                        }
+                        yield json.dumps(chunk_result) + "\n"
+                    
+                    # Signal completion of this question and notify preparation for next question
+                    answer_result = {
+                        "question_index": i,
+                        "question": question,
+                        "answer": answer,
+                        "status": "completed"
+                    }
+                    
+                    # Save the answer in the job data
+                    all_answers[f"question_{i+1}"] = {
+                        "question": question,
+                        "answer": answer
+                    }
+                    
+                    yield json.dumps(answer_result) + "\n"
+                    
+                    # If not the last question, notify the user that we're preparing the next one
+                    if i < len(job_data['questions']) - 1:
+                        prep_result = {
+                            "status": "preparing_next",
+                            "message": "Preparing next question..."
+                        }
+                        yield json.dumps(prep_result) + "\n"
+                    
+                except Exception as e:
+                    print(f"Error processing question {i}: {str(e)}")
+                    error_result = {
+                        "question_index": i,
+                        "question": question,
+                        "error": str(e),
+                        "status": "error"
+                    }
+                    all_answers[f"question_{i+1}"] = {
+                        "question": question,
+                        "answer": f"Error generating answer: {str(e)}"
+                    }
+                    yield json.dumps(error_result) + "\n"
+            
+            # After all questions are processed, create the markdown and text files
+            try:
+                # Create markdown file
+                md_content = format_as_markdown(job_data['filename'], all_answers)
+                md_filename = f"{job_data['unique_filename'].rsplit('.', 1)[0]}.md"
+                md_filepath = os.path.join(app.config['UPLOAD_FOLDER'], md_filename)
                 
-                # Signal completion of this question
-                result = {
-                    "question_index": i,
-                    "question": question,
-                    "answer": answer,
-                    "status": "completed"
+                # Ensure the upload directory exists
+                os.makedirs(os.path.dirname(md_filepath), exist_ok=True)
+                
+                with open(md_filepath, 'w', encoding='utf-8') as f:
+                    f.write(md_content)
+                
+                # Create text file
+                txt_content = format_as_text(job_data['filename'], all_answers)
+                txt_filename = f"{job_data['unique_filename'].rsplit('.', 1)[0]}.txt"
+                txt_filepath = os.path.join(app.config['UPLOAD_FOLDER'], txt_filename)
+                
+                # Ensure the upload directory exists for txt file
+                os.makedirs(os.path.dirname(txt_filepath), exist_ok=True)
+                
+                with open(txt_filepath, 'w', encoding='utf-8') as f:
+                    f.write(txt_content)
+                
+                # Update job status
+                job_data['answers'] = all_answers
+                job_data['md_filename'] = md_filename
+                job_data['txt_filename'] = txt_filename
+                job_data['status'] = 'completed'
+                
+                # Send completion message
+                completion_result = {
+                    "completed": True,
+                    "md_filename": md_filename,
+                    "txt_filename": txt_filename
                 }
-                
-                # Save the answer in the job data
-                all_answers[f"question_{i+1}"] = {
-                    "question": question,
-                    "answer": answer
-                }
-                
-                yield json.dumps(result) + "\n"
+                yield json.dumps(completion_result) + "\n"
+                print(f"Job {job_id} completed successfully")
                 
             except Exception as e:
-                error_result = {
-                    "question_index": i,
-                    "question": question,
-                    "error": str(e)
+                print(f"Error in file generation phase: {str(e)}")
+                error_msg = {
+                    "error": f"Error generating output files: {str(e)}"
                 }
-                all_answers[f"question_{i+1}"] = {
-                    "question": question,
-                    "answer": f"Error generating answer: {str(e)}"
-                }
-                yield json.dumps(error_result) + "\n"
-        
-        # After all questions are processed, create the markdown file
-        md_content = format_as_markdown(job_data['filename'], all_answers)
-        md_filename = f"{job_data['unique_filename'].rsplit('.', 1)[0]}.md"
-        md_filepath = os.path.join(app.config['UPLOAD_FOLDER'], md_filename)
-        
-        with open(md_filepath, 'w', encoding='utf-8') as f:
-            f.write(md_content)
-            
-        # Create text file version
-        txt_content = format_as_text(job_data['filename'], all_answers)
-        txt_filename = f"{job_data['unique_filename'].rsplit('.', 1)[0]}.txt"
-        txt_filepath = os.path.join(app.config['UPLOAD_FOLDER'], txt_filename)
-        
-        with open(txt_filepath, 'w', encoding='utf-8') as f:
-            f.write(txt_content)
-        
-        # Update job status as completed
-        job_data['answers'] = all_answers
-        job_data['md_filename'] = md_filename
-        job_data['txt_filename'] = txt_filename
-        job_data['status'] = 'completed'
-        
-        # Send final completion message
-        completion_result = {
-            "completed": True,
-            "md_filename": md_filename,
-            "txt_filename": txt_filename
-        }
-        yield json.dumps(completion_result) + "\n"
+                yield json.dumps(error_msg) + "\n"
+                
+                # Even if we have an error, try to send a completion message with any files we did manage to create
+                try:
+                    md_filename = job_data.get('md_filename', '')
+                    txt_filename = job_data.get('txt_filename', '')
+                    
+                    # If we have at least one file, send a completion
+                    if md_filename or txt_filename:
+                        completion_result = {
+                            "completed": True,
+                            "md_filename": md_filename,
+                            "txt_filename": txt_filename,
+                            "partial": True  # Flag that this is a partial completion
+                        }
+                        yield json.dumps(completion_result) + "\n"
+                        print(f"Job {job_id} completed partially with some errors")
+                except Exception as inner_e:
+                    print(f"Failed to send completion message: {str(inner_e)}")
+                
+        except Exception as e:
+            print(f"Unexpected error in generate_results: {str(e)}")
+            error_msg = {
+                "error": f"Unexpected error: {str(e)}"
+            }
+            yield json.dumps(error_msg) + "\n"
     
     return Response(stream_with_context(generate_results()), 
                     mimetype='text/event-stream')
@@ -402,21 +472,43 @@ PAGE END
 @app.route('/download/<filename>')
 def download(filename):
     """Download a processed markdown file."""
-    mimetype = 'text/markdown' if filename.endswith('.md') else 'text/plain'
-    return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), 
-                    mimetype=mimetype, 
-                    download_name=filename,
-                    as_attachment=True)
+    try:
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            return jsonify({"error": f"File {filename} not found"}), 404
+            
+        # Determine mimetype based on extension
+        mimetype = 'text/markdown' if filename.endswith('.md') else 'text/plain'
+        
+        return send_file(file_path, 
+                        mimetype=mimetype, 
+                        download_name=filename,
+                        as_attachment=True)
+    except Exception as e:
+        print(f"Error in download route: {str(e)}")
+        return jsonify({"error": f"Error downloading file: {str(e)}"}), 500
 
 @app.route('/download-text/<filename>')
 def download_text(filename):
     """Download a processed text file."""
-    base_filename = filename.rsplit('.', 1)[0]
-    txt_filename = f"{base_filename}.txt"
-    return send_file(os.path.join(app.config['UPLOAD_FOLDER'], txt_filename), 
-                    mimetype='text/plain', 
-                    download_name=txt_filename,
-                    as_attachment=True)
+    try:
+        base_filename = filename.rsplit('.', 1)[0]
+        txt_filename = f"{base_filename}.txt"
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], txt_filename)
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            return jsonify({"error": f"File {txt_filename} not found"}), 404
+            
+        return send_file(file_path, 
+                        mimetype='text/plain', 
+                        download_name=txt_filename,
+                        as_attachment=True)
+    except Exception as e:
+        print(f"Error in download-text route: {str(e)}")
+        return jsonify({"error": f"Error downloading file: {str(e)}"}), 500
 
 if __name__ == '__main__':
     print(f"Starting web server with LLM model: {LLM_MODEL}")
