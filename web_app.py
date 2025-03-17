@@ -40,11 +40,11 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # Configure questions
 DEFAULT_QUESTIONS = [
-    "What is the main topic of this document?",
-    "What are the key findings or conclusions?",
-    "What methodology was used?",
-    "Who are the target audience of this document?",
-    "What are the limitations or gaps identified in this document?"
+    "Bitte schreibe eine zusammenfassung der Akte in ca. 250 Wörtern",
+    "Bitte erstelle ein formatiertes Inhaltsverzeichnis mit zusammenfassenden Titeln und Seitenangaben",
+    "Bitte gib mir, formatiert, eine Ausgabe über alle Beteiligte mit Kontaktangaben, außer der Kanzlei Riedl",
+    "Waren bei dem Fall Drogen, Alkohol, Medikamente oder Fahrerflucht im Spiel",
+    "Bitte beantworte kurz und knapp wer der Schuldige in dem Fall war und wie hoch der Schade ist"
 ]
 
 # Initialize the pipeline
