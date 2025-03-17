@@ -30,8 +30,10 @@ env/
 data/pdfs/*.pdf
 data/uploads/*.pdf
 data/uploads/*.md
+data/uploads/*.txt
 
 # Vector store
+
 data/chroma/
 
 # IDE specific files
