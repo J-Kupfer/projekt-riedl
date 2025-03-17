@@ -1,7 +1,7 @@
 """
 LLM module for Ollama integration.
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import PromptTemplate
@@ -56,6 +56,99 @@ class OllamaWrapper:
             
             Antwort:"""
         )
+        
+        # Define question-specific prompts
+        self.question_prompts = {
+            "Bitte schreibe eine zusammenfassung der Akte in ca. 250 Wörtern": PromptTemplate.from_template(
+                """Bitte schreibe eine Zusammenfassung der folgenden Akte in GENAU 200-250 Wörtern. 
+                Die Antwort MUSS auf Deutsch sein und die Wortzahl zwischen 200 und 250 liegen. Nicht mehr und nicht weniger.
+                
+                Beziehe dich dabei auf die wichtigsten Aspekte des Falles, wie Tatbestand, beteiligte Personen, Ergebnisse, 
+                und rechtliche Einschätzungen. Nutze alle relevanten Informationen aus dem bereitgestellten Kontext.
+                
+                Wichtig: 
+                1. Beziehe dich bei deinen Antworten immer auf die Seitenzahlen im Dokument (PAGE NUMBER X).
+                2. Gib für wichtige Informationen und Zitate immer die Seitenzahl an, auf der sie zu finden sind.
+                3. Erwähne NICHT die Wortzahl in deiner Antwort. Schreibe die Zusammenfassung einfach mit der richtigen Länge.
+                
+                Kontext:
+                {context}
+                
+                Frage: {query}
+                
+                Antwort:"""
+            ),
+            "Bitte erstelle ein formatiertes Inhaltsverzeichnis mit zusammenfassenden Titeln und Seitenangaben": PromptTemplate.from_template(
+                """Erstelle ein detailliertes, formatiertes Inhaltsverzeichnis für das vorliegende Dokument. 
+                
+                Das Inhaltsverzeichnis soll:
+                - Alle wichtigen Abschnitte und Unterabschnitte des Dokuments enthalten
+                - Für jeden Eintrag einen kurzen, aussagekräftigen Titel haben, der den Inhalt zusammenfasst
+                - Bei jedem Eintrag die entsprechende Seitenzahl angeben
+                - Eine klare hierarchische Struktur aufweisen
+                
+                Bitte achte besonders auf eine übersichtliche Formatierung, die die Struktur des Dokuments deutlich macht.
+                Verwende die Seitenzahlen, die im Kontext als "PAGE NUMBER X" angegeben sind.
+                
+                Kontext:
+                {context}
+                
+                Frage: {query}
+                
+                Antwort:"""
+            ),
+            "Bitte gib mir, formatiert, eine Ausgabe über alle Beteiligte mit Kontaktangaben, außer der Kanzlei Riedl": PromptTemplate.from_template(
+                """Erstelle eine strukturierte Liste aller am Fall beteiligten Personen und Parteien mit ihren vollständigen Kontaktdaten.
+                
+                Die Liste soll:
+                - Alle Beteiligten mit vollständigem Namen auflisten
+                - Für jede Person/Partei alle verfügbaren Kontaktinformationen angeben (Adresse, Telefonnummer, E-Mail, etc.)
+                - Klar formatiert und übersichtlich sein
+                - Die Kanzlei Riedl und deren Mitarbeiter NICHT enthalten
+                - Die Rolle jeder Person im Fall angeben (z.B. Beschuldigter, Zeuge, Geschädigter, etc.)
+                
+                Bitte gib für jede Information die entsprechende Seitenzahl an, auf der sie im Dokument zu finden ist.
+                
+                Kontext:
+                {context}
+                
+                Frage: {query}
+                
+                Antwort:"""
+            ),
+            "Waren bei dem Fall Drogen, Alkohol, Medikamente oder Fahrerflucht im Spiel": PromptTemplate.from_template(
+                """Untersuche das Dokument gründlich nach Hinweisen auf:
+                1. Drogenkonsum oder -besitz
+                2. Alkoholkonsum
+                3. Einnahme von Medikamenten mit Auswirkung auf die Fahrtüchtigkeit
+                4. Fahrerflucht
+                
+                Beantworte die Frage eindeutig mit Ja oder Nein für jeden dieser Aspekte und führe die entsprechenden Belege mit Seitenzahlen an.
+                Falls zu einem Aspekt keine Informationen vorliegen, gib an, dass dazu keine Angaben im Dokument zu finden sind.
+                
+                Kontext:
+                {context}
+                
+                Frage: {query}
+                
+                Antwort:"""
+            ),
+            "Bitte beantworte kurz und knapp wer der Schuldige in dem Fall war und wie hoch der Schade ist": PromptTemplate.from_template(
+                """Beantworte präzise und kompakt folgende zwei Fragen:
+                
+                1. Wer trägt die Schuld in diesem Fall? (Nenne konkret die Person oder Partei)
+                2. Wie hoch ist der entstandene Schaden? (Gib den exakten Betrag mit Währung an)
+                
+                Die Antwort soll kurz und prägnant sein, nicht mehr als 2-3 Sätze. Beziehe dich ausschließlich auf die Fakten aus dem Dokument und gib die entsprechenden Seitenzahlen an.
+                
+                Kontext:
+                {context}
+                
+                Frage: {query}
+                
+                Antwort:"""
+            )
+        }
     
     def get_llm(self):
         """
@@ -66,12 +159,13 @@ class OllamaWrapper:
         """
         return self.llm
     
-    def create_rag_chain(self, retriever):
+    def create_rag_chain(self, retriever, question=None):
         """
         Create a RAG chain with the given retriever.
         
         Args:
             retriever: Document retriever to use
+            question: The question to determine which prompt to use
             
         Returns:
             A runnable chain that can answer questions
@@ -97,26 +191,32 @@ PAGE END
             docs = retriever.invoke(query_str)
             return format_docs(docs)
         
+        # Select the appropriate prompt template
+        prompt_template = self.rag_prompt_template
+        if question and question in self.question_prompts:
+            prompt_template = self.question_prompts[question]
+        
         # Create the RAG chain
         rag_chain = (
             {
                 "context": lambda x: retrieve_and_format(x),
                 "query": RunnablePassthrough(),
             }
-            | self.rag_prompt_template
+            | prompt_template
             | self.llm
             | StrOutputParser()
         )
         
-        return rag_chain 
+        return rag_chain
 
-    def stream_answer(self, query: str, retriever) -> str:
+    def stream_answer(self, query: str, retriever, question=None) -> str:
         """
         Stream the answer in real-time to the console.
         
         Args:
             query: User query
             retriever: Document retriever
+            question: The question to determine which prompt to use
             
         Returns:
             The complete answer as a string
@@ -140,6 +240,11 @@ PAGE END
         
         context = "\n\n".join(formatted_docs)
         
+        # Select the appropriate prompt template
+        prompt_template = self.rag_prompt_template
+        if question and question in self.question_prompts:
+            prompt_template = self.question_prompts[question]
+        
         # Prepare inputs
         inputs = {
             "context": context,
@@ -147,7 +252,7 @@ PAGE END
         }
         
         # Get prepared prompt
-        prompt = self.rag_prompt_template.format_prompt(**inputs).to_string()
+        prompt = prompt_template.format_prompt(**inputs).to_string()
         
         # Set streaming=True parameter
         streaming_llm = OllamaLLM(

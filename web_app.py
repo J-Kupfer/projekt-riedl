@@ -87,8 +87,8 @@ def generate_answers(pdf_path, questions=None):
     answers = {}
     for i, question in enumerate(questions):
         try:
-            # Create the RAG chain
-            rag_chain = pipeline.ollama_llm.create_rag_chain(retriever)
+            # Create the RAG chain with the specific question for prompt selection
+            rag_chain = pipeline.ollama_llm.create_rag_chain(retriever, question=question)
             # Generate the answer
             answer = rag_chain.invoke(question)
             answers[f"question_{i+1}"] = {
@@ -112,7 +112,7 @@ def format_as_markdown(filename, answers):
             continue
         
         md_content += f"## {qa['question']}\n\n"
-        md_content += f"{qa['answer']}\n\n"
+        md_content += f"{clean_output(qa['answer'])}\n\n"
     
     return md_content
 
@@ -125,13 +125,29 @@ def format_as_text(filename, answers):
             continue
         
         text_content += f"{qa['question']}\n{'-' * len(qa['question'])}\n\n"
-        text_content += f"{qa['answer']}\n\n"
+        text_content += f"{clean_output(qa['answer'])}\n\n"
     
     # Clean up any HTML tags that might appear in the LLM output
     # Use a regular expression to remove all HTML tags
     text_content = re.sub(r'<[^>]*>', '', text_content)
     
     return text_content
+
+def clean_output(text):
+    """Clean performance metrics and formatting artifacts from LLM output."""
+    # Remove word count metrics
+    text = re.sub(r'(?i)(Diese Zusammenfassung|Der Text) (umfasst|enthält|besteht aus) \d+(-\d+)? Wörter(n)?\.?', '', text)
+    text = re.sub(r'(?i)Wortanzahl: \d+(-\d+)? Wörter(n)?\.?', '', text)
+    text = re.sub(r'(?i)\(\d+(-\d+)? Wörter\)', '', text)
+    text = re.sub(r'(?i)Etwa \d+(-\d+)? Wörter\.?', '', text)
+    
+    # Remove HTML tags
+    text = re.sub(r'<[^>]*>', '', text)
+    
+    # Remove any trailing whitespace or extra new lines
+    text = text.strip()
+    
+    return text
 
 # Routes
 @app.route('/')
@@ -227,8 +243,8 @@ def process_job(job_id):
         # Generate answers for each question incrementally
         for i, question in enumerate(job_data['questions']):
             try:
-                # Create the RAG chain
-                rag_chain = pipeline.ollama_llm.create_rag_chain(retriever)
+                # Create the RAG chain with the specific question for prompt selection
+                rag_chain = pipeline.ollama_llm.create_rag_chain(retriever, question=question)
                 # Generate the answer
                 answer = rag_chain.invoke(question)
                 result = {
