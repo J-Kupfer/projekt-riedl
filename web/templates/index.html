@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF RAG Analysis</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/style.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            background-color: #fff;
+            color: #212529;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .results {
+            display: none;
+            margin-top: 30px;
+        }
+        .question-card {
+            margin-bottom: 1.5rem;
+            background-color: #fff;
+        }
+        .spinner-border {
+            width: 3rem;
+            height: 3rem;
+        }
+        .model-info {
+            font-size: 0.9rem;
+            color: #6c757d;
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .card {
+            background-color: #fff;
+            border-color: #dee2e6;
+        }
+        .card-header {
+            background-color: #f8f9fa;
+            border-color: #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-2 text-center">PDF Document Analysis</h1>
+        <p class="model-info">Using model: <strong>{{ model_name }}</strong></p>
+        
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Upload a PDF Document</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="uploadForm" enctype="multipart/form-data">
+                            <div class="mb-3">
+                                <label for="pdfFile" class="form-label">Select PDF file</label>
+                                <input class="form-control" type="file" id="pdfFile" name="pdf" accept=".pdf" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <h5>Questions to Answer</h5>
+                                <p class="text-muted small">These questions will be analyzed against the uploaded PDF.</p>
+                                
+                                <div id="questionsContainer">
+                                    {% for question in questions %}
+                                    <div class="input-group mb-2">
+                                        <input type="text" class="form-control question-input" value="{{ question }}" placeholder="Enter question">
+                                        <button class="btn btn-outline-secondary remove-question" type="button">Remove</button>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                                
+                                <button type="button" id="addQuestion" class="btn btn-sm btn-outline-primary mt-2">Add Question</button>
+                            </div>
+                            
+                            <div class="d-grid">
+                                <button type="submit" class="btn btn-primary" id="analyzeBtn">Analyze Document</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="loading" id="loadingIndicator">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-2">Analyzing document... This may take a few minutes.</p>
+        </div>
+        
+        <div class="results" id="resultsSection">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>Analysis Results</h2>
+                <button id="downloadBtn" class="btn btn-success" disabled>Download as Markdown</button>
+            </div>
+            
+            <div id="answersContainer">
+                <!-- Results will be populated here -->
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const uploadForm = document.getElementById('uploadForm');
+            const loadingIndicator = document.getElementById('loadingIndicator');
+            const resultsSection = document.getElementById('resultsSection');
+            const answersContainer = document.getElementById('answersContainer');
+            const addQuestionBtn = document.getElementById('addQuestion');
+            const questionsContainer = document.getElementById('questionsContainer');
+            const downloadBtn = document.getElementById('downloadBtn');
+            
+            let mdFilename = '';
+            let processingStream = null;
+            
+            // Add a new question field
+            addQuestionBtn.addEventListener('click', function() {
+                const newQuestionGroup = document.createElement('div');
+                newQuestionGroup.className = 'input-group mb-2';
+                newQuestionGroup.innerHTML = `
+                    <input type="text" class="form-control question-input" placeholder="Enter question">
+                    <button class="btn btn-outline-secondary remove-question" type="button">Remove</button>
+                `;
+                questionsContainer.appendChild(newQuestionGroup);
+                
+                // Add event listener to the new remove button
+                newQuestionGroup.querySelector('.remove-question').addEventListener('click', function() {
+                    questionsContainer.removeChild(newQuestionGroup);
+                });
+            });
+            
+            // Remove question when clicking remove button
+            document.addEventListener('click', function(e) {
+                if (e.target && e.target.classList.contains('remove-question')) {
+                    const questionGroup = e.target.closest('.input-group');
+                    questionsContainer.removeChild(questionGroup);
+                }
+            });
+            
+            // Handle form submission
+            uploadForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                // Get all questions
+                const questionInputs = document.querySelectorAll('.question-input');
+                const questions = Array.from(questionInputs).map(input => input.value.trim()).filter(q => q !== '');
+                
+                if (questions.length === 0) {
+                    alert('Please add at least one question.');
+                    return;
+                }
+                
+                const formData = new FormData();
+                const fileInput = document.getElementById('pdfFile');
+                
+                if (fileInput.files.length === 0) {
+                    alert('Please select a PDF file.');
+                    return;
+                }
+                
+                formData.append('pdf', fileInput.files[0]);
+                formData.append('questions', JSON.stringify(questions));
+                
+                // Show loading indicator
+                loadingIndicator.style.display = 'block';
+                
+                // Clear previous results but show the results section
+                answersContainer.innerHTML = '';
+                resultsSection.style.display = 'block';
+                
+                // Create placeholder cards for all questions
+                questions.forEach((question, index) => {
+                    const card = document.createElement('div');
+                    card.className = 'card question-card';
+                    card.id = `question-card-${index}`;
+                    card.innerHTML = `
+                        <div class="card-header">
+                            <h5>${question}</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex justify-content-center">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    answersContainer.appendChild(card);
+                });
+                
+                // Submit the form
+                fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        loadingIndicator.style.display = 'none';
+                        alert('Error: ' + data.error);
+                        return;
+                    }
+                    
+                    // Start processing with the job ID
+                    startProcessing(data.job_id, questions);
+                })
+                .catch(error => {
+                    loadingIndicator.style.display = 'none';
+                    alert('Error: ' + error.message);
+                    console.error('Error:', error);
+                });
+            });
+            
+            // Function to start processing and handle incremental results
+            function startProcessing(jobId, questions) {
+                // If there's an existing stream, abort it
+                if (processingStream) {
+                    processingStream.abort();
+                }
+                
+                // Create an AbortController for the fetch request
+                const controller = new AbortController();
+                processingStream = controller;
+                
+                // Start the processing request with streaming response
+                fetch(`/process/${jobId}`, {
+                    method: 'GET',
+                    signal: controller.signal
+                })
+                .then(response => {
+                    // Get a reader for the response stream
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    
+                    function readStream() {
+                        return reader.read().then(({ done, value }) => {
+                            if (done) {
+                                // Process any remaining data in the buffer
+                                if (buffer.trim()) {
+                                    try {
+                                        const result = JSON.parse(buffer.trim());
+                                        handleResult(result);
+                                    } catch (e) {
+                                        console.error('Error parsing JSON:', e);
+                                    }
+                                }
+                                return;
+                            }
+                            
+                            // Decode the value and add it to the buffer
+                            buffer += decoder.decode(value, { stream: true });
+                            
+                            // Process complete lines in the buffer
+                            const lines = buffer.split('\n');
+                            buffer = lines.pop(); // Keep the last incomplete line in the buffer
+                            
+                            // Process each complete line
+                            for (const line of lines) {
+                                if (line.trim()) {
+                                    try {
+                                        const result = JSON.parse(line.trim());
+                                        handleResult(result);
+                                    } catch (e) {
+                                        console.error('Error parsing JSON:', e);
+                                    }
+                                }
+                            }
+                            
+                            // Continue reading
+                            return readStream();
+                        });
+                    }
+                    
+                    return readStream();
+                })
+                .catch(error => {
+                    if (error.name !== 'AbortError') {
+                        loadingIndicator.style.display = 'none';
+                        alert('Error: ' + error.message);
+                        console.error('Error:', error);
+                    }
+                });
+            }
+            
+            // Handle a result from the stream
+            function handleResult(result) {
+                // Hide loading indicator when we start getting results
+                loadingIndicator.style.display = 'none';
+                
+                // Handle error
+                if (result.error) {
+                    alert('Error: ' + result.error);
+                    return;
+                }
+                
+                // Handle completion
+                if (result.completed) {
+                    mdFilename = result.md_filename;
+                    downloadBtn.disabled = false;
+                    return;
+                }
+                
+                // Handle question result
+                if (result.question_index !== undefined) {
+                    const cardId = `question-card-${result.question_index}`;
+                    const card = document.getElementById(cardId);
+                    
+                    if (card) {
+                        // Parse markdown in the answer
+                        const answerHtml = result.error ? 
+                            `<p class="text-danger">Error: ${result.error}</p>` : 
+                            marked.parse(result.answer);
+                        
+                        card.querySelector('.card-body').innerHTML = `
+                            <div class="answer-container">${answerHtml}</div>
+                        `;
+                    }
+                }
+            }
+            
+            // Handle download button
+            downloadBtn.addEventListener('click', function() {
+                if (mdFilename) {
+                    window.location.href = `/download/${mdFilename}`;
+                } else {
+                    alert('No results available for download.');
+                }
+            });
+        });
+    </script>
+</body>
+</html> 

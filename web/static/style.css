@@ -1,0 +1,106 @@
+/* Additional styles for PDF RAG Analysis app */
+
+body {
+    background-color: #fff;
+    color: #212529;
+}
+
+.card {
+    background-color: #fff;
+    border-color: #dee2e6;
+}
+
+.card-header {
+    background-color: #f8f9fa;
+    border-color: #dee2e6;
+}
+
+.feature-icon {
+    font-size: 2rem;
+    color: #0d6efd;
+    margin-bottom: 1rem;
+}
+
+.file-upload-wrapper {
+    position: relative;
+    margin-bottom: 1.5rem;
+}
+
+.pdf-preview {
+    max-width: 100%;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 0.5rem;
+    margin-top: 1rem;
+}
+
+.answer-container {
+    white-space: pre-line;
+}
+
+/* Markdown styling */
+.answer-container h1 {
+    font-size: 1.5rem;
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.answer-container h2 {
+    font-size: 1.3rem;
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.answer-container h3 {
+    font-size: 1.1rem;
+    margin-top: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.answer-container p {
+    margin-bottom: 0.75rem;
+}
+
+.answer-container ul, .answer-container ol {
+    margin-bottom: 0.75rem;
+    padding-left: 1.5rem;
+}
+
+.answer-container code {
+    background-color: #f8f9fa;
+    padding: 0.2rem 0.4rem;
+    border-radius: 0.2rem;
+    font-size: 0.9em;
+}
+
+.answer-container pre {
+    background-color: #f8f9fa;
+    padding: 1rem;
+    border-radius: 0.3rem;
+    overflow-x: auto;
+}
+
+.answer-container blockquote {
+    border-left: 0.25rem solid #dee2e6;
+    padding-left: 1rem;
+    color: #6c757d;
+}
+
+.answer-container table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+}
+
+.answer-container th, .answer-container td {
+    border: 1px solid #dee2e6;
+    padding: 0.5rem;
+}
+
+footer {
+    margin-top: 4rem;
+    padding: 2rem 0;
+    border-top: 1px solid #e5e5e5;
+}
+
+/* Remove dark mode styling */ 

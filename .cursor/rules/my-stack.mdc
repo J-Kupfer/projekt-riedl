@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Technical stack
+
+- Python for the backend  
+- Langchain and langgraph for the rag  
+- chroma as the local vector store 
+- ollama for the local llms  
+  
